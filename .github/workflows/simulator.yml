@@ -1,0 +1,171 @@
+name: Simulator Screenshot
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: simulator-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshot:
+    name: Build, launch, screenshot
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          echo "Installed Xcode apps:"
+          ls -d /Applications/Xcode*.app || true
+          if [[ -d /Applications/Xcode.app ]]; then
+            sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          else
+            XCODE_APP=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n 1)
+            sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
+          fi
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          installed=0
+          for attempt in 1 2 3; do
+            if HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install xcodegen; then
+              installed=1
+              break
+            fi
+            echo "brew install xcodegen failed (attempt ${attempt}); updating Homebrew"
+            brew update || true
+            sleep 5
+          done
+          if [[ "${installed}" -ne 1 ]]; then
+            echo "Falling back to the XcodeGen GitHub release"
+            TAG=$(curl -fsSL https://api.github.com/repos/yonaskolb/XcodeGen/releases/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')
+            TMP=$(mktemp -d)
+            curl -fsSL -o "${TMP}/xcodegen.zip" "https://github.com/yonaskolb/XcodeGen/releases/download/${TAG}/xcodegen.zip"
+            unzip -q "${TMP}/xcodegen.zip" -d "${TMP}"
+            BIN=$(find "${TMP}" -type f -name xcodegen | head -n 1)
+            if [[ -z "${BIN}" ]]; then
+              find "${TMP}" -type f -name xcodegen | head
+              exit 1
+            fi
+            sudo mkdir -p /usr/local/bin
+            sudo cp "${BIN}" /usr/local/bin/xcodegen
+            sudo chmod +x /usr/local/bin/xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          xcodebuild -project WireGuide.xcodeproj -list
+
+      - name: Pick iOS 17+ iPhone simulator
+        id: sim
+        run: python3 .github/scripts/select_simulator.py
+
+      - name: Build for simulator
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project WireGuide.xcodeproj \
+            -scheme WireGuide \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Boot simulator, install, launch, screenshot
+        run: |
+          set -euo pipefail
+          UDID="${{ steps.sim.outputs.device_id }}"
+          APP_PATH=$(find build/Build/Products -name "WireGuide.app" -type d | head -n 1)
+          if [[ -z "${APP_PATH}" ]]; then
+            echo "WireGuide.app not found under build/"
+            find build -name "*.app" -type d || true
+            exit 1
+          fi
+          echo "App: ${APP_PATH}"
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "${APP_PATH}/Info.plist")
+          echo "Bundle id: ${BUNDLE_ID}"
+          file "${APP_PATH}/WireGuide"
+
+          # Current simulator runtimes refuse to install an unsigned bundle.
+          codesign --force --sign - "${APP_PATH}"
+          codesign -dv "${APP_PATH}"
+
+          boot_ok=0
+          for attempt in 1 2 3; do
+            xcrun simctl boot "${UDID}" || true
+            if xcrun simctl bootstatus "${UDID}" -b; then
+              boot_ok=1
+              break
+            fi
+            echo "Boot attempt ${attempt} failed"
+            xcrun simctl shutdown "${UDID}" || true
+            sleep 5
+          done
+          if [[ "${boot_ok}" -ne 1 ]]; then
+            echo "Simulator failed to boot"
+            xcrun simctl list devices
+            exit 1
+          fi
+
+          # Best-effort. A status-bar failure should not hide the app screenshot.
+          xcrun simctl ui "${UDID}" appearance dark || true
+          xcrun simctl status_bar "${UDID}" override \
+            --time "9:41" \
+            --batteryState charged \
+            --batteryLevel 100 \
+            --cellularBars 4 \
+            --wifiBars 3 \
+            || true
+
+          xcrun simctl install "${UDID}" "${APP_PATH}"
+          xcrun simctl terminate "${UDID}" "${BUNDLE_ID}" || true
+          xcrun simctl launch "${UDID}" "${BUNDLE_ID}"
+
+          ok=0
+          for attempt in 1 2 3 4 5 6 7 8; do
+            sleep 5
+            if xcrun simctl io "${UDID}" screenshot screenshot.png \
+              && python3 .github/scripts/check_screenshot.py screenshot.png; then
+              ok=1
+              break
+            fi
+            echo "Screenshot attempt ${attempt} was blank or unreadable"
+            file screenshot.png || true
+            if [[ $((attempt % 3)) -eq 0 ]]; then
+              xcrun simctl launch "${UDID}" "${BUNDLE_ID}" || true
+            fi
+          done
+
+          if [[ "${ok}" -ne 1 ]]; then
+            echo "Screenshot never showed a rendered screen"
+            xcrun simctl spawn "${UDID}" log show --last 3m --style compact 2>/dev/null \
+              | grep -i -E "WireGuide|assertion" | tail -n 80 || true
+            exit 1
+          fi
+          ls -la screenshot.png
+          file screenshot.png
+
+      - name: Upload screenshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-screenshot
+          path: screenshot.png
+          if-no-files-found: error
