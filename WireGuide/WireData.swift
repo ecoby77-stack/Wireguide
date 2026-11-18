@@ -21,7 +21,15 @@ struct QuickMatch: Identifiable, Hashable {
     let wire: String
     let breaker: String
     /// Optional caution shown under the row. Nil for ordinary circuit matches.
-    let note: String? = nil
+    let note: String?
+
+    init(id: String, use: String, wire: String, breaker: String, note: String? = nil) {
+        self.id = id
+        self.use = use
+        self.wire = wire
+        self.breaker = breaker
+        self.note = note
+    }
 }
 
 struct SmallConductorLimit: Identifiable, Hashable {
