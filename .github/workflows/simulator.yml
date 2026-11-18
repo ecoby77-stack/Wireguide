@@ -135,37 +135,47 @@ jobs:
             || true
 
           xcrun simctl install "${UDID}" "${APP_PATH}"
-          xcrun simctl terminate "${UDID}" "${BUNDLE_ID}" || true
-          xcrun simctl launch "${UDID}" "${BUNDLE_ID}"
 
-          ok=0
-          for attempt in 1 2 3 4 5 6 7 8; do
-            sleep 5
-            if xcrun simctl io "${UDID}" screenshot screenshot.png \
-              && python3 .github/scripts/check_screenshot.py screenshot.png; then
-              ok=1
-              break
+          capture_screenshot() {
+            local outfile="$1"
+            shift
+            xcrun simctl terminate "${UDID}" "${BUNDLE_ID}" || true
+            xcrun simctl launch "${UDID}" "${BUNDLE_ID}" "$@"
+            # Covers the app's delayed scroll-to-note on the quick-match capture.
+            sleep 2
+            local ok=0
+            for attempt in 1 2 3 4 5 6 7 8; do
+              sleep 4
+              if xcrun simctl io "${UDID}" screenshot "${outfile}" \
+                && python3 .github/scripts/check_screenshot.py "${outfile}"; then
+                ok=1
+                break
+              fi
+              echo "Screenshot ${outfile} attempt ${attempt} was blank or unreadable"
+              file "${outfile}" || true
+              if [[ $((attempt % 3)) -eq 0 ]]; then
+                xcrun simctl launch "${UDID}" "${BUNDLE_ID}" "$@" || true
+              fi
+            done
+            if [[ "${ok}" -ne 1 ]]; then
+              echo "Screenshot never showed a rendered screen (${outfile})"
+              xcrun simctl spawn "${UDID}" log show --last 3m --style compact 2>/dev/null \
+                | grep -i -E "WireGuide|assertion" | tail -n 80 || true
+              return 1
             fi
-            echo "Screenshot attempt ${attempt} was blank or unreadable"
-            file screenshot.png || true
-            if [[ $((attempt % 3)) -eq 0 ]]; then
-              xcrun simctl launch "${UDID}" "${BUNDLE_ID}" || true
-            fi
-          done
+            ls -la "${outfile}"
+            file "${outfile}"
+          }
 
-          if [[ "${ok}" -ne 1 ]]; then
-            echo "Screenshot never showed a rendered screen"
-            xcrun simctl spawn "${UDID}" log show --last 3m --style compact 2>/dev/null \
-              | grep -i -E "WireGuide|assertion" | tail -n 80 || true
-            exit 1
-          fi
-          ls -la screenshot.png
-          file screenshot.png
+          capture_screenshot screenshot.png
+          capture_screenshot screenshot-quick-match.png --show-quick-match
 
       - name: Upload screenshot artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: simulator-screenshot
-          path: screenshot.png
+          path: |
+            screenshot.png
+            screenshot-quick-match.png
           if-no-files-found: error

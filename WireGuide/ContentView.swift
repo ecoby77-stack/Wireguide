@@ -39,26 +39,40 @@ private struct Density {
 }
 
 struct ContentView: View {
+    /// Set by the simulator workflow (`--show-quick-match`) so a second
+    /// screenshot can land on the dwelling-service caution.
+    private var showQuickMatch: Bool {
+        ProcessInfo.processInfo.arguments.contains("--show-quick-match")
+    }
+
     var body: some View {
-        GeometryReader { geo in
+        ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
                     ViewThatFits(in: .vertical) {
                         ReferenceBlock(density: .comfortable)
                         ReferenceBlock(density: .compact)
                         ReferenceBlock(density: .tight)
                     }
-                    .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
 
                     QuickMatchSection()
                         .padding(.horizontal, 16)
-                        .padding(.top, 8)
                     DisclaimerSection()
                         .padding(.horizontal, 16)
                 }
             }
             .scrollIndicators(.hidden)
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .onAppear {
+                guard showQuickMatch else { return }
+                // Repeat after the first layout pass. A cold simulator can miss
+                // a single scroll that runs before the rows exist.
+                for delay in [0.6, 1.6] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        proxy.scrollTo("dwelling-200", anchor: .center)
+                    }
+                }
+            }
         }
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
@@ -67,7 +81,6 @@ struct ContentView: View {
 }
 
 /// Title, copper THHN table, and small-conductor footnote.
-/// Laid out at its natural height and pinned to the top of the first screen.
 private struct ReferenceBlock: View {
     let density: Density
 
@@ -93,7 +106,6 @@ private struct ReferenceBlock: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .padding(.bottom, 8)
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
@@ -206,33 +218,45 @@ private struct QuickMatchSection: View {
     }
 
     private func quickMatchRow(_ item: QuickMatch, isAlternate: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(item.use)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(item.use)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text(item.wire)
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .layoutPriority(1)
+                Text(item.wire)
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .layoutPriority(1)
 
-            Text(item.breaker)
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .layoutPriority(1)
+                Text(item.breaker)
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .layoutPriority(1)
+            }
+
+            if let note = item.note {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(Color(red: 1.0, green: 0.76, blue: 0.28))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isAlternate ? Color(white: 0.12) : Color(white: 0.08))
+        .id(item.id)
     }
 }
 

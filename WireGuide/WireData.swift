@@ -20,6 +20,8 @@ struct QuickMatch: Identifiable, Hashable {
     let use: String
     let wire: String
     let breaker: String
+    /// Optional caution shown under the row. Nil for ordinary circuit matches.
+    let note: String? = nil
 }
 
 struct SmallConductorLimit: Identifiable, Hashable {
@@ -61,8 +63,15 @@ enum WireData {
         QuickMatch(id: "range", use: "Range", wire: "8 AWG", breaker: "40–50 A"),
         QuickMatch(id: "water-heater", use: "Water heater", wire: "10 AWG", breaker: "30 A"),
         QuickMatch(id: "ev", use: "EV charger", wire: "8–6 AWG", breaker: "40–60 A"),
-        QuickMatch(id: "subpanel-100", use: "Subpanel feeder", wire: "2 AWG", breaker: "100 A"),
-        QuickMatch(id: "subpanel-200", use: "Subpanel feeder", wire: "2/0 AWG", breaker: "200 A"),
+        QuickMatch(id: "subpanel-100", use: "Subpanel feeder, 100 A", wire: "2 AWG", breaker: "100 A"),
+        QuickMatch(
+            id: "dwelling-200",
+            use: "Dwelling service / main feeder, 200 A",
+            wire: "2/0 AWG",
+            breaker: "200 A",
+            note: "Dwelling service or main feeder only — NEC 310.12 (83% rule). Not for subpanel feeders."
+        ),
+        QuickMatch(id: "subpanel-200", use: "Subpanel feeder, 200 A", wire: "3/0 AWG", breaker: "200 A"),
     ]
 
     static let disclaimer =

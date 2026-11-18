@@ -45,6 +45,7 @@ Icon?
 
 # Simulator / CI artifacts
 screenshot.png
+screenshot-quick-match.png
 *.xcresult
 
 # Python
